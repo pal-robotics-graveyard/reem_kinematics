@@ -44,7 +44,6 @@
 #include <reem_kinematics_constraint_aware/matrix_inverter.h>
 #include <reem_kinematics_constraint_aware/ik_solver.h>
 
-#include <ros/ros.h> // TODO: Remove!
 using namespace reem_kinematics_constraint_aware;
 using std::size_t;
 using Eigen::VectorXd;
@@ -214,9 +213,7 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     }
 
   }
-//   ROS_WARN_STREAM("i = " << i << " <= " << max_iter_ << "\n" << q_next(0) << " " << q_next(1) << " " <<q_next(2) << " " <<q_next(3) << " " <<q_next(4) << " " << q_next(5)<< " " << q_next(6)<< " " << q_next(7)<< " " << q_next(8));
-//   ROS_WARN_STREAM("delta_twist " << delta_twist_.transpose());
-//   ROS_ERROR_STREAM("return " << (i < max_iter_));
+
   return (i < max_iter_);
 }
 
@@ -233,9 +230,7 @@ void IkSolver::updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::F
 
     KDL::Vector rot   = ith_frame.M.GetRot();
     KDL::Vector rot_d = x_desired[i].M.GetRot();
-//     ROS_ERROR_STREAM("q " << q.data);
-//     ROS_ERROR_STREAM("Curr " << ith_frame.p[0] << " " << ith_frame.p[1] << " " << ith_frame.p[2] << ", " << rot[0] << " " << rot[1] << " " << rot[2]);
-//     ROS_ERROR_STREAM("Desi " << x_desired[i].p[0] << " " << x_desired[i].p[1] << " " << x_desired[i].p[2] << ", " << rot_d[0] << " " << rot_d[1] << " " << rot_d[2]);
+
     // Extract only task-space directions relevant to the IK problem
     const CoupledDirections& endpoint_coupled_dirs = coupled_dirs_[i];
     for (size_t j = 0; j < endpoint_coupled_dirs.size(); ++j)
@@ -244,7 +239,6 @@ void IkSolver::updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::F
       ++x_idx;
     }
   }
-//   ROS_ERROR_STREAM("delta_twist " << delta_twist_.transpose());
 
   // Enforce task space maximum velocity through uniform scaling
   double delta_twist_scaling = 1.0;
@@ -261,8 +255,6 @@ void IkSolver::updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::F
   {
     delta_twist_ *= delta_twist_scaling;
   }
-//   ROS_ERROR_STREAM("delta_twist " << delta_twist_.transpose());
-//   ROS_ERROR("-----");
 }
 
 void IkSolver::updateJacobian(const KDL::JntArray& q)
