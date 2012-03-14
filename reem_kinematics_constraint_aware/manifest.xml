@@ -1,0 +1,28 @@
+<package>
+  <description brief="reem_kinematics_constraint_aware">
+    Inverse kinematics solver and plugin for the REEM robot upper body.
+  </description>
+  <author>Adolfo Rodriguez Tsouroukdissian, Hilario Tome.</author>
+  <license>Modified BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/reem_kinematics_constraint_aware</url>
+
+  <depend package="angles"/>
+  <depend package="kdl"/>
+  <depend package="kdl_parser"/>
+  <depend package="kinematics_base"/>
+  <depend package="pluginlib"/>
+  <depend package="tf"/>
+  <depend package="tf_conversions"/>
+
+  <depend package="arm_navigation_msgs"/>
+  <depend package="geometry_msgs"/>
+  <depend package="kinematics_msgs"/>
+
+  <export>
+    <cpp cflags="-I${prefix}/include" lflags="-Wl,-rpath,${prefix}/lib -L${prefix}/lib -lreem_kinematics_constraint_aware"/>
+    <kinematics_base plugin="${prefix}/kinematics_plugins.xml" />
+  </export>
+</package>
+
+

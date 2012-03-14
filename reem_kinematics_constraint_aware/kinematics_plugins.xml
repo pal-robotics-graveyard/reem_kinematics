@@ -1,0 +1,8 @@
+<library path="lib/libreem_kinematics_constraint_aware">
+  <class name="reem_kinematics_constraint_aware/ReemKinematicsPlugin" type="reem_kinematics_constraint_aware::ReemKinematicsPlugin" base_class_type="kinematics::KinematicsBase">
+    <description>
+      A generic implementation of kinematics as a plugin based on KDL and custom IK kinematics solvers.
+    </description>
+  </class>
+</library>
+

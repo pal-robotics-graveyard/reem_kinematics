@@ -1,0 +1,14 @@
+<stack>
+  <description brief="reem_kinematics">reem_kinematics</description>
+  <author>Maintained by Adolfo Rodriguez</author>
+  <license>BSD,Modified BSD</license>  
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/reem_kinematics</url>
+  <depend stack="arm_navigation" /> <!-- kinematics_base, kinematics_msgs, arm_navigation_msgs -->
+  <depend stack="common_msgs" /> <!-- geometry_msgs -->
+  <depend stack="geometry" /> <!-- tf, tf_conversions, angles -->
+  <depend stack="orocos_kinematics_dynamics" /> <!-- kdl -->
+  <depend stack="pluginlib" /> <!-- pluginlib -->
+  <depend stack="robot_model" /> <!-- kdl_parser -->
+  <depend stack="ros" />
+</stack>
