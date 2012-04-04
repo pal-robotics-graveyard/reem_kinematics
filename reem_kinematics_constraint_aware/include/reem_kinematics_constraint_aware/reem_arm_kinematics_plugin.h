@@ -99,8 +99,14 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
     bool getPositionIK(const geometry_msgs::Pose &ik_pose,
                        const std::vector<double> &ik_seed_state,
                        std::vector<double> &solution,
-                       int &error_code);      
-    
+                       int &error_code);
+
+    bool getPositionIK(const geometry_msgs::Pose &ik_pose,
+                       const std::vector<double> &ik_seed_state,
+                       const std::vector<double> &posture,
+                       std::vector<double> &solution,
+                       int &error_code);
+
     /**
      * @brief Given a desired pose of the end-effector, search for the joint angles required to reach it.
      * This particular method is intended for "searching" for a solutions by stepping through the redundancy
@@ -187,6 +193,8 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
     KDL::Chain kdl_chain_;
     std::string root_name_,tip_name_;
     KDL::JntArray joint_min_, joint_max_;
+
+    std::vector<double> default_posture_;
   };
 }
 

@@ -111,6 +111,37 @@ bool ReemKinematicsPlugin::initialize(std::string name)
     return false;
   }
 
+  // Populate map from joint names to KDL tree indices
+  std::map<std::string, int> joint_name_to_idx;
+  for (size_t i = 0; i < kdl_chain_.getNrOfSegments(); ++i)
+  {
+    const KDL::Joint& joint = kdl_chain_.getSegment(i).getJoint();
+    if (joint.getType() != KDL::Joint::None)
+    {
+      joint_name_to_idx[joint.getName()] = i;
+    }
+  }
+
+  // Default posture to use in velocity IK
+  const int q_dim = kdl_chain_.getNrOfJoints();
+  default_posture_.resize(q_dim, 0.0);
+  default_posture_[joint_name_to_idx["arm_right_1_joint"]] = -0.4; // NOTE: No error handling for nonexisting joint name
+  default_posture_[joint_name_to_idx["arm_right_2_joint"]] =  0.6; // TODO: Read from config file
+  default_posture_[joint_name_to_idx["arm_right_3_joint"]] = -0.1;
+  default_posture_[joint_name_to_idx["arm_right_4_joint"]] =  0.6109;
+  default_posture_[joint_name_to_idx["arm_right_5_joint"]] =  0.2;
+  default_posture_[joint_name_to_idx["arm_right_6_joint"]] =  0.4;
+  default_posture_[joint_name_to_idx["arm_right_7_joint"]] =  0.2;
+  KDL::JntArray posture(q_dim);
+  for (int i = 0; i < q_dim; ++i) {posture(i) = default_posture_[i];} // KDL-compatible representation also required
+
+  // Joint space weights diagonal matrix
+  Eigen::VectorXd Wqinv = Eigen::VectorXd::Ones(q_dim);
+  Wqinv(joint_name_to_idx["torso_1_joint"]) = 0.1;
+  Wqinv(joint_name_to_idx["torso_2_joint"]) = 0.1;
+  Wqinv(joint_name_to_idx["arm_right_5_joint"]) = 0.5;
+  Wqinv(joint_name_to_idx["arm_right_7_joint"]) = 0.5;
+
   // Get Solver Parameters
   int max_iterations;
   double epsilon;
@@ -125,8 +156,10 @@ bool ReemKinematicsPlugin::initialize(std::string name)
   ik_solver_->setJointPositionLimits(joint_min_.data, joint_max_.data);
   ik_solver_->setEpsilon(epsilon);
   ik_solver_->setMaxIterations(max_iterations);
-  ik_solver_->setMaxDeltaTwist(0.02);
-
+  ik_solver_->setMaxDeltaTwist(0.02); // 0.6m * 1/30s
+  ik_solver_->setMaxDeltaJointPos(3.0 / 30.0); // 3rad * 1/30s
+  ik_solver_->setJointSpaceWeights(Wqinv);
+  ik_solver_->setPosture(posture);
   active_ = true;
   return true;
 }
@@ -241,9 +274,10 @@ int ReemKinematicsPlugin::getKDLSegmentIndex(const std::string &name)
 }
 
 bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
-                                           const std::vector<double> &ik_seed_state,
-                                           std::vector<double> &solution,
-                                           int &error_code)
+                                         const std::vector<double> &ik_seed_state,
+                                         const std::vector<double> &posture,
+                                         std::vector<double> &solution,
+                                         int &error_code)
 {
   ros::WallTime n1 = ros::WallTime::now();
   if(!active_)
@@ -251,44 +285,59 @@ bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
     ROS_ERROR("kinematics not active");
     return false;
   }
-  
+
   ROS_DEBUG_STREAM("getPositionIK1:Position request pose is " <<
                    ik_pose.position.x << " " <<
                    ik_pose.position.y << " " <<
                    ik_pose.position.z << " " <<
-                   ik_pose.orientation.x << " " << 
-                   ik_pose.orientation.y << " " << 
-                   ik_pose.orientation.z << " " << 
+                   ik_pose.orientation.x << " " <<
+                   ik_pose.orientation.y << " " <<
+                   ik_pose.orientation.z << " " <<
                    ik_pose.orientation.w);
 
   KDL::Frame pose_desired;
   tf::PoseMsgToKDL(ik_pose, pose_desired);
   //Do the inverse kinematics
-  KDL::JntArray jnt_pos_in;
-  KDL::JntArray jnt_pos_out;
-  jnt_pos_in.resize(dimension_);
+  KDL::JntArray jnt_pos_in(dimension_);
+  KDL::JntArray jnt_pos_out(dimension_);
+  KDL::JntArray jnt_posture(dimension_);
   for(unsigned int i=0; i < dimension_; i++)
   {
-    jnt_pos_in(i) = ik_seed_state[i];
+    jnt_pos_in(i)  = ik_seed_state[i];
+    jnt_posture(i) = posture[i];
   }
+  ik_solver_->setPosture(jnt_posture);
   bool ik_valid = ik_solver_->solve(jnt_pos_in, pose_desired, jnt_pos_out);
   ROS_DEBUG_STREAM("IK success " << ik_valid << " time " << (ros::WallTime::now()-n1).toSec());
+  solution.resize(dimension_);
+  // NOTE: In the original implementation, the solution is not reported if IK failed. We do populate the best estimate
+  for(unsigned int i=0; i < dimension_; i++)
+  {
+    solution[i] = jnt_pos_out(i);
+  }
   if(ik_valid)
   {
-    solution.resize(dimension_);
-    for(unsigned int i=0; i < dimension_; i++)
-    {
-      solution[i] = jnt_pos_out(i);
-    }
     error_code = kinematics::SUCCESS;
     return true;
   }
   else
   {
-    ROS_DEBUG("An IK solution could not be found");   
+    ROS_DEBUG("An IK solution could not be found");
     error_code = kinematics::NO_IK_SOLUTION;
     return false;
   }
+}
+
+bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
+                                         const std::vector<double> &ik_seed_state,
+                                         std::vector<double> &solution,
+                                         int &error_code)
+{
+  return getPositionIK(ik_pose,
+                       ik_seed_state,
+                       default_posture_,
+                       solution,
+                       error_code);
 }
 
 bool ReemKinematicsPlugin::searchPositionIK(const geometry_msgs::Pose &ik_pose,

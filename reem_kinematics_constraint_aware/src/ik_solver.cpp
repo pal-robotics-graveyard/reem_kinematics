@@ -43,7 +43,7 @@
 // Local
 #include <reem_kinematics_constraint_aware/matrix_inverter.h>
 #include <reem_kinematics_constraint_aware/ik_solver.h>
-
+#include <ros/ros.h> // TODO: REMOVE!
 using namespace reem_kinematics_constraint_aware;
 using std::size_t;
 using Eigen::VectorXd;
@@ -118,6 +118,7 @@ void IkSolver::init(const KDL::Tree&                     tree,
 
   // Default values of position solver parameters
   delta_twist_max_ = Eigen::NumTraits<double>::highest();
+  delta_joint_pos_max_ = Eigen::NumTraits<double>::highest();
   velik_gain_      = 1.0;
   eps_             = Eigen::NumTraits<double>::epsilon();
   max_iter_        = 1;
@@ -139,24 +140,15 @@ void IkSolver::init(const KDL::Tree&                     tree,
   delta_q_     = VectorXd::Zero(q_dim);
   q_min_       = VectorXd::Constant(q_dim, Eigen::NumTraits<double>::lowest());  // If joint limits are not set, any
   q_max_       = VectorXd::Constant(q_dim, Eigen::NumTraits<double>::highest()); // representable joint value is valid
+  q_tmp_       = VectorXd::Zero(q_dim);
 
   jacobian_     = Eigen::MatrixXd(x_dim, q_dim);
   jacobian_tmp_ = KDL::Jacobian(q_dim);
 
-  q_posture_           = Eigen::VectorXd::Zero(q_dim);
+  q_posture_           = KDL::JntArray(q_dim);
   nullspace_projector_ = Eigen::MatrixXd(q_dim, q_dim);
   identity_qdim_       = Eigen::MatrixXd::Identity(q_dim, q_dim);
-  Wqinv_               = Eigen::VectorXd::Ones(q_dim);
-  Wqinv_(joint_name_to_idx_["torso_1_joint"]) = 0.1;  // TODO: Read from config file
-  Wqinv_(joint_name_to_idx_["torso_2_joint"]) = 0.1;
-  q_posture_ = Eigen::VectorXd::Zero(q_dim);
-  q_posture_(joint_name_to_idx_["arm_right_1_joint"]) = -0.4;
-  q_posture_(joint_name_to_idx_["arm_right_2_joint"]) =  0.6;
-  q_posture_(joint_name_to_idx_["arm_right_3_joint"]) = -0.1;
-  q_posture_(joint_name_to_idx_["arm_right_4_joint"]) =  0.6109;
-  q_posture_(joint_name_to_idx_["arm_right_5_joint"]) =  0.2;
-  q_posture_(joint_name_to_idx_["arm_right_6_joint"]) =  0.4;
-  q_posture_(joint_name_to_idx_["arm_right_7_joint"]) =  0.2;
+  Wqinv_ref_           = Eigen::VectorXd::Ones(q_dim);
 }
 
 bool IkSolver::solve(const KDL::JntArray&           q_current,
@@ -165,6 +157,9 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
 {
   // Precondition
   assert(endpoint_names_.size() == x_desired.size());
+
+  // Reset joint-space weight matrix
+  Wqinv_ = Wqinv_ref_;
 
   q_next = q_current;
   size_t i;
@@ -194,24 +189,37 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     nullspace_projector_ = identity_qdim_ - W * inverter_->inverse() * J; // NOTE: Not rt-friendly, allocates temporaries
 
     // Compute incremental joint displacement
-    delta_q_  = W * inverter_->dlsSolve(delta_twist_) + nullspace_projector_ * (q_posture_ - q_next.data);
+    delta_q_  = W * inverter_->dlsSolve(delta_twist_) + nullspace_projector_ * (q_posture_.data - q_next.data);
     delta_q_ *= velik_gain_;
+
+    // Saturate incremental joint displacement, if necessary
+    const double delta_q_scaling = delta_joint_pos_max_ / delta_q_.cwiseAbs().maxCoeff();
+
+    // Cache value of q_next
+    q_tmp_ = q_next.data;
 
     // Integrate joint velocity
     q_next.data += delta_q_;
 
     // Enforce joint position limits
+    bool joint_limit_violation = false;
+    Wqinv_ = Wqinv_ref_;
     typedef Eigen::VectorXd::Index Index;
     for(Index j = 0; j < q_min_.size(); ++j)
     {
-      if(q_next(j) < q_min_(j)) {q_next(j) = q_min_(j);}
+      if(q_next(j) < q_min_(j) || q_next(j) > q_max_(j))
+      {
+        Wqinv_(j) = 0.0;
+        joint_limit_violation = true;
+        ROS_DEBUG_STREAM("Iteration " << i << ", Locking joint " << j << " ( " << q_min_(j) << ", " << q_next(j) << ", " << q_max_(j) << "), weights = " << Wqinv_.transpose());
+      }
     }
-
-    for(Index j = 0; j < q_max_.size(); ++j)
+    if (joint_limit_violation)
     {
-      if(q_next(j) > q_max_(j)) {q_next(j) = q_max_(j);}
+      // Keep last configuration that does not exceed position limits
+      q_next.data = q_tmp_;
     }
-
+    ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", delta_q " << delta_q_.transpose());
   }
 
   return (i < max_iter_);
@@ -241,20 +249,8 @@ void IkSolver::updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::F
   }
 
   // Enforce task space maximum velocity through uniform scaling
-  double delta_twist_scaling = 1.0;
-  typedef Eigen::VectorXd::Index Index;
-  for (Index i = 0; i < delta_twist_.size(); ++i)
-  {
-    const double current_scaling = delta_twist_max_ / std::abs(delta_twist_(i));
-    if (current_scaling < delta_twist_scaling)
-    {
-      delta_twist_scaling = current_scaling;
-    }
-  }
-  if (delta_twist_scaling < 1.0)
-  {
-    delta_twist_ *= delta_twist_scaling;
-  }
+  const double delta_twist_scaling = delta_twist_max_ / delta_twist_.cwiseAbs().maxCoeff();
+  if (delta_twist_scaling < 1.0) {delta_twist_ *= delta_twist_scaling;}
 }
 
 void IkSolver::updateJacobian(const KDL::JntArray& q)
