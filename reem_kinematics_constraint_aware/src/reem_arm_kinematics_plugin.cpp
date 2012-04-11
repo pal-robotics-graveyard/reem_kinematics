@@ -137,8 +137,8 @@ bool ReemKinematicsPlugin::initialize(std::string name)
 
   // Joint space weights diagonal matrix
   Eigen::VectorXd Wqinv = Eigen::VectorXd::Ones(q_dim);
-  Wqinv(joint_name_to_idx["torso_1_joint"]) = 0.1;
-  Wqinv(joint_name_to_idx["torso_2_joint"]) = 0.1;
+  Wqinv(joint_name_to_idx["torso_1_joint"]) = 0.25;
+  Wqinv(joint_name_to_idx["torso_2_joint"]) = 0.25;
   Wqinv(joint_name_to_idx["arm_right_5_joint"]) = 0.5;
   Wqinv(joint_name_to_idx["arm_right_7_joint"]) = 0.5;
 

@@ -158,6 +158,9 @@ private:
   void updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::Frame>& x_desired);
 
   void updateJacobian(const KDL::JntArray& q);
+
+  /// \brief Limit joint space weights when close to a joint position limit.
+  void setJointSpaceWeightsPosLimits(const KDL::JntArray& q);
 };
 
 inline void IkSolver::setJointPositionLimits(const Eigen::VectorXd& q_min, const Eigen::VectorXd& q_max)

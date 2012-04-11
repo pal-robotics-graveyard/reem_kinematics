@@ -158,10 +158,14 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
   // Precondition
   assert(endpoint_names_.size() == x_desired.size());
 
-  // Reset joint-space weight matrix
-  Wqinv_ = Wqinv_ref_;
+//   // Reset joint-space weight matrix
+//   Wqinv_ = Wqinv_ref_;
 
   q_next = q_current;
+
+  // Update joint-space weight matrix: Limit effect of joints near their position limit
+  setJointSpaceWeightsPosLimits(q_next);
+
   size_t i;
   for (i = 0; i < max_iter_; ++i)
   {
@@ -203,7 +207,11 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
 
     // Enforce joint position limits
     bool joint_limit_violation = false;
-    Wqinv_ = Wqinv_ref_;
+    // Update joint-space weight matrix: Limit effect of joints near their position limit
+    setJointSpaceWeightsPosLimits(q_next);
+//     Wqinv_ = Wqinv_ref_;
+
+    // Update joint-space weight matrix: Zero-out weights of joints exceeding their position limit
     typedef Eigen::VectorXd::Index Index;
     for(Index j = 0; j < q_min_.size(); ++j)
     {
@@ -270,4 +278,46 @@ void IkSolver::updateJacobian(const KDL::JntArray& q)
       ++x_idx;
     }
   }
+}
+
+void IkSolver::setJointSpaceWeightsPosLimits(const KDL::JntArray& q)
+{
+  assert(q.data.rows() == Wqinv_ref_.rows());
+
+  //Generalized logistic function params
+  const double max_val         = 0.99; // Function maps [0, 1] to [0.01, 0.99]  // NOTE: Magic value
+  const double growth_rate     = -2.0 * std::log(1.0 / max_val - 1.0);
+  const double max_growth_time = 0.5;
+
+  for (size_t i = 0; i < q.rows(); ++i)
+  {
+    assert(q_max_(i) > q_min_(i));
+    const double activation_size = std::abs(q_max_(i) - q_min_(i)) * 0.1; // NOTE: Magic value
+    const double q_min_activate = q_min_(i) + activation_size;
+    const double q_max_activate = q_max_(i) - activation_size;
+
+    double blend_linear = 0.0; // Value in [0, 1], where 0 -> use original weight, 1 -> scale down weight to minimum
+    double blend_smooth = 0.0; // Value in [0, max_val]
+    if (q(i) <= q_min_(i))
+    {
+      blend_smooth = 1.0;
+    }
+    else if (q(i) >= q_max_(i))
+    {
+      blend_smooth = 1.0;
+    }
+    else if (q(i) < q_min_activate)
+    {
+      blend_linear = std::abs(q(i) - q_min_activate) / activation_size;
+      blend_smooth = 1.0 / (1 + std::exp(-growth_rate * (blend_linear - max_growth_time))); // Value in [0, max_val]
+    }
+    else if (q(i) > q_max_activate)
+    {
+      blend_linear = std::abs(q_max_activate - q(i)) / activation_size;
+      blend_smooth = 1.0 / (1 + std::exp(-growth_rate * (blend_linear - max_growth_time))); // Value in [0, max_val]
+    }
+
+    Wqinv_(i) = (1.0 - blend_smooth) * Wqinv_ref_(i);
+  }
+  ROS_DEBUG_STREAM(">> Joint space weights diagonal: " << Wqinv_.transpose()); // TODO: Remove!
 }
