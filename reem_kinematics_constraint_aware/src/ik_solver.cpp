@@ -112,7 +112,7 @@ void IkSolver::init(const KDL::Tree&                     tree,
   inverter_.reset(new Inverter(x_dim, q_dim));
 
   // Matrix inversion parameters TODO: Expose!
-  inverter_->setLsInverseThreshold(1e-5);
+  inverter_->setLsInverseThreshold(1e-5); // NOTE: Magic values
   inverter_->setDlsInverseThreshold(1e-4);
   inverter_->setMaxDamping(0.05);
 
@@ -135,11 +135,13 @@ void IkSolver::init(const KDL::Tree&                     tree,
     }
   }
 
+  // Joint space weights updater
+  limits_avoider_.reset(new JointPositionLimitsAvoider(q_dim));
+  limits_avoider_->setSmoothing(0.8); // NOTE: Magic value
+
   // Preallocate IK resources
   delta_twist_ = VectorXd::Zero(x_dim);
   delta_q_     = VectorXd::Zero(q_dim);
-  q_min_       = VectorXd::Constant(q_dim, Eigen::NumTraits<double>::lowest());  // If joint limits are not set, any
-  q_max_       = VectorXd::Constant(q_dim, Eigen::NumTraits<double>::highest()); // representable joint value is valid
   q_tmp_       = VectorXd::Zero(q_dim);
 
   jacobian_     = Eigen::MatrixXd(x_dim, q_dim);
@@ -148,7 +150,6 @@ void IkSolver::init(const KDL::Tree&                     tree,
   q_posture_           = KDL::JntArray(q_dim);
   nullspace_projector_ = Eigen::MatrixXd(q_dim, q_dim);
   identity_qdim_       = Eigen::MatrixXd::Identity(q_dim, q_dim);
-  Wqinv_ref_           = Eigen::VectorXd::Ones(q_dim);
 }
 
 bool IkSolver::solve(const KDL::JntArray&           q_current,
@@ -159,9 +160,10 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
   assert(endpoint_names_.size() == x_desired.size());
 
   q_next = q_current;
+  q_tmp_ = q_current.data;
 
   // Update joint-space weight matrix: Limit effect of joints near their position limit
-  setJointSpaceWeightsPosLimits(q_next);
+  limits_avoider_->resetJointLimitAvoidance().applyJointLimitAvoidance(q_next.data);
 
   size_t i;
   for (i = 0; i < max_iter_; ++i)
@@ -180,8 +182,8 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     using Eigen::VectorXd;
     using Eigen::DiagonalWrapper;
 
-    const MatrixXd& J = jacobian_;                                 // Convenience alias
-    const DiagonalWrapper<const VectorXd> W = Wqinv_.asDiagonal(); // Convenience alias
+    const MatrixXd& J = jacobian_;                                                        // Convenience alias
+    const DiagonalWrapper<const VectorXd> W = limits_avoider_->getWeights().asDiagonal(); // Convenience alias
 
     // Perform SVD decomposition of J W
     inverter_->compute(J * W);
@@ -209,21 +211,19 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     // Enforce joint position limits
 
     // Update joint-space weight matrix: Limit effect of joints near their position limit
-    setJointSpaceWeightsPosLimits(q_next);
+    limits_avoider_->applyJointLimitAvoidance(q_next.data);
 
-    typedef Eigen::VectorXd::Index Index;
-    for(Index j = 0; j < q_min_.size(); ++j)
+    if (!limits_avoider_->isValid(q_next.data))
     {
-      if(q_next(j) < q_min_(j) || q_next(j) > q_max_(j))
-      {
-        // Keep last configuration that does not exceed position limits
-        q_next.data = q_tmp_;
-        ROS_DEBUG_STREAM("Iteration " << i << ", not updating joint position values, weights = " << Wqinv_.transpose());
-        break;
-      }
+      // Keep last configuration that does not exceed position limits
+      q_next.data = q_tmp_;
+      ROS_DEBUG_STREAM("Iteration " << i << ", not updating joint position values, weights = " << limits_avoider_->getWeights().transpose());
     }
-    ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", delta_q " << delta_q_.transpose());
+
+//     ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", delta_q " << delta_q_.transpose()); // TODO: Remove?
   }
+
+  ROS_DEBUG_STREAM("Total iterations " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q " << delta_q_.transpose());
 
   return (i < max_iter_);
 }
@@ -275,44 +275,77 @@ void IkSolver::updateJacobian(const KDL::JntArray& q)
   }
 }
 
-void IkSolver::setJointSpaceWeightsPosLimits(const KDL::JntArray& q)
+JointPositionLimitsAvoider& JointPositionLimitsAvoider::setJointLimits(const Eigen::VectorXd& q_min,
+                                                                       const Eigen::VectorXd& q_max,
+                                                                       double activation_window)
 {
-  assert(q.data.rows() == Wqinv_ref_.rows());
+  assert(w_.size() == q_min.size() && "qmin size mismatch.");
+  assert(w_.size() == q_max.size() && "qmax size mismatch.");
+  assert(activation_window >= 0.0 && activation_window <= 1.0 && "Activation window should belong to [0, 1].");
 
-  for (size_t i = 0; i < q.rows(); ++i)
+  q_min_             = q_min;
+  q_max_             = q_max;
+  q_activation_size_ = (q_max_ - q_min_).cwiseAbs() * activation_window;
+  q_activation_min_  = q_min_ + q_activation_size_;
+  q_activation_max_  = q_max_ - q_activation_size_;
+  return *this;
+}
+
+JointPositionLimitsAvoider& JointPositionLimitsAvoider::applyJointLimitAvoidance(const Eigen::VectorXd& q)
+{
+  assert(q.size() == w_.size());
+
+  typedef Eigen::VectorXd::Index Index;
+  for (Index i = 0; i < q.size(); ++i)
   {
-    assert(q_max_(i) > q_min_(i));
-    const double activation_size = std::abs(q_max_(i) - q_min_(i)) * 0.20; // TODO: Magic value, make param!
-    const double q_min_activate = q_min_(i) + activation_size;
-    const double q_max_activate = q_max_(i) - activation_size;
-
-    double weight_scaling;
-
-    // TODO: Weights should not be penalized if we're moving away from the joint limits.
     if (q(i) <= q_min_(i))
     {
-      weight_scaling = 0.0;
+      // Minimum joint position limit violated
+      w_scaling_(i) = 0.0;
     }
     else if (q(i) >= q_max_(i))
     {
-      weight_scaling = 0.0;
+      // Maximum joint position limit violated
+      w_scaling_(i) = 0.0;
     }
-    else if (q(i) < q_min_activate)
+    else if (q(i) < q_activation_min_(i))
     {
-      const double activation = std::abs(q(i) - q_min_activate) / activation_size; // Grows linearly from 0 to 1 as joint limit is apprached
-      weight_scaling = 1.0 - 1.0 / (1 + std::exp(-12.0 * activation + 6.0 ));      // Generalized logistic function mapping [0, 1] onto itself
+      // In the lower joint limit avoidance zone.
+      const double activation = std::abs(q(i) - q_activation_min_(i)) / q_activation_size_(i); // Grows linearly from 0 to 1 as joint limit is apprached
+      w_scaling_(i) = 1.0 - 1.0 / (1 + std::exp(-12.0 * activation + 6.0 ));                   // Generalized logistic function mapping [0, 1] to [1, 0]
+
+      // If moving away from joint limit, make further progress less difficult. Transition to no scaling is low-pass
+      // filtered to avoid discontinuities and reduce weight value chattering across IK iterations
+      if (w_scaling_(i) > w_scaling_prev_(i))
+      {
+        w_scaling_(i) = 1.0 - smoothing_ * (1.0 - w_scaling_(i));
+      }
     }
-    else if (q(i) > q_max_activate)
+    else if (q(i) > q_activation_max_(i))
     {
-      const double activation = std::abs(q_max_activate - q(i)) / activation_size; // Grows linearly from 0 to 1 as joint limit is apprached
-      weight_scaling = 1.0 - 1.0 / (1 + std::exp(-12.0 * activation + 6.0 ));      // Generalized logistic function mapping [0, 1] onto itself
+      // In the upper joint limit avoidance zone
+      const double activation = std::abs(q_activation_max_(i) - q(i)) / q_activation_size_(i); // Grows linearly from 0 to 1 as joint limit is apprached
+      w_scaling_(i) = 1.0 - 1.0 / (1 + std::exp(-12.0 * activation + 6.0 ));                   // Generalized logistic function mapping [0, 1] to [1, 0]
+
+      // If moving away from joint limit, make further progress less difficult. Transition to no scaling is low-pass
+      // filtered to avoid discontinuities and reduce weight value chattering across IK iterations
+      if (w_scaling_(i) > w_scaling_prev_(i))
+      {
+        w_scaling_(i) = 1.0 - smoothing_ * (1.0 - w_scaling_(i));
+      }
     }
     else
     {
-      weight_scaling = 1.0;
+      w_scaling_(i) = 1.0;
     }
-
-    Wqinv_(i) = weight_scaling * Wqinv_ref_(i);
   }
-  ROS_DEBUG_STREAM(">> Joint space weights diagonal: " << Wqinv_.transpose()); // TODO: Remove!
+
+  // Scale weights
+  w_scaled_ = w_.cwiseProduct(w_scaling_);
+
+  // Update previous value
+  w_scaling_prev_ = w_scaling_;
+
+//   ROS_DEBUG_STREAM(">> Joint space weights diagonal: " << w_scaled_.transpose()); // TODO: Remove!
+  return *this;
 }

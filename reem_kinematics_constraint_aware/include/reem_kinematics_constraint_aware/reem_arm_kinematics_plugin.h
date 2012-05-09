@@ -91,7 +91,6 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
 
     /**
      * @brief Given a desired pose of the end-effector, compute the joint angles to reach it
-     * @param ik_link_name - the name of the link for which IK is being computed
      * @param ik_pose the desired pose of the link
      * @param ik_seed_state an initial guess solution for the inverse kinematics
      * @return True if a valid solution was found, false otherwise
@@ -101,6 +100,14 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
                        std::vector<double> &solution,
                        int &error_code);
 
+    /**
+     * @brief Given a desired pose of the end-effector, compute the joint angles to reach it
+     * @param ik_pose the desired pose of the link
+     * @param ik_seed_state an initial guess solution for the inverse kinematics
+     * @param posture Joint posture to be used as secondary task, tht is projected on the nullspace of the primary IK
+     * task.
+     * @return True if a valid solution was found, false otherwise
+     */
     bool getPositionIK(const geometry_msgs::Pose &ik_pose,
                        const std::vector<double> &ik_seed_state,
                        const std::vector<double> &posture,
@@ -193,8 +200,6 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
     KDL::Chain kdl_chain_;
     std::string root_name_,tip_name_;
     KDL::JntArray joint_min_, joint_max_;
-
-    std::vector<double> default_posture_;
   };
 }
 
