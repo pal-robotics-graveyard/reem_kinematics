@@ -200,6 +200,7 @@ class ReemKinematicsPlugin : public kinematics::KinematicsBase
     KDL::Chain kdl_chain_;
     std::string root_name_,tip_name_;
     KDL::JntArray joint_min_, joint_max_;
+    std::vector<double> default_posture_;
   };
 }
 

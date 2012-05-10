@@ -75,7 +75,7 @@ KDL::JntArray ReemKinematicsPlugin::getRandomConfiguration()
 {
   KDL::JntArray jnt_array;
   jnt_array.resize(dimension_);
-  for(unsigned int i=0; i < dimension_; i++)
+  for(unsigned int i=0; i < dimension_; ++i)
     jnt_array(i) = genRandomNumber(joint_min_(i),joint_max_(i));
   return jnt_array;
 }
@@ -139,14 +139,16 @@ bool ReemKinematicsPlugin::initialize(std::string name)
   private_handle.param("max_delta_q", max_delta_q, 0.03);
   private_handle.param("velik_gain", velik_gain,   1.0);
 
-  // Joint space weights diagonal matrix
+  // Joint space weights diagonal matrix and default posture
   Eigen::VectorXd Wqinv = Eigen::VectorXd::Ones(q_dim);
+  default_posture_.resize(q_dim);
   for (size_t i = 0; i < kdl_chain_.getNrOfSegments(); ++i)
   {
     const KDL::Joint& joint = kdl_chain_.getSegment(i).getJoint();
     if (joint.getType() != KDL::Joint::None)
     {
-      private_handle.param("joint_weights/" + joint.getName(), Wqinv(joint_name_to_idx[joint.getName()]), 1.0);
+      private_handle.param("joint_weights/"   + joint.getName(), Wqinv(joint_name_to_idx[joint.getName()]),            1.0);
+      private_handle.param("default_posture/" + joint.getName(), default_posture_[joint_name_to_idx[joint.getName()]], 0.0);
     }
   }
 
@@ -245,7 +247,7 @@ bool ReemKinematicsPlugin::readJoints(urdf::Model &robot_model)
       chain_info_.limits[index].has_position_limits = hasLimits;
       chain_info_.limits[index].min_position = lower;
       chain_info_.limits[index].max_position = upper;
-      i++;
+      ++i;
     }
     link = robot_model.getLink(link->getParent()->name);
   }
@@ -254,7 +256,7 @@ bool ReemKinematicsPlugin::readJoints(urdf::Model &robot_model)
 
 int ReemKinematicsPlugin::getJointIndex(const std::string &name)
 {
-  for (unsigned int i=0; i < chain_info_.joint_names.size(); i++) {
+  for (unsigned int i=0; i < chain_info_.joint_names.size(); ++i) {
     if (chain_info_.joint_names[i] == name)
       return i;
   }
@@ -268,7 +270,7 @@ int ReemKinematicsPlugin::getKDLSegmentIndex(const std::string &name)
     if (kdl_chain_.getSegment(i).getName() == name) {
       return i+1;
     }
-    i++;
+    ++i;
   }
   return -1;
 }
@@ -301,7 +303,7 @@ bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
   KDL::JntArray jnt_pos_in(dimension_);
   KDL::JntArray jnt_pos_out(dimension_);
   KDL::JntArray jnt_posture(dimension_);
-  for(unsigned int i=0; i < dimension_; i++)
+  for(unsigned int i=0; i < dimension_; ++i)
   {
     jnt_pos_in(i)  = ik_seed_state[i];
     jnt_posture(i) = posture[i];
@@ -311,7 +313,7 @@ bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
   ROS_DEBUG_STREAM("IK success " << ik_valid << " time " << (ros::WallTime::now()-n1).toSec());
   solution.resize(dimension_);
   // NOTE: In the original implementation, the solution is not reported if IK failed. We do populate the best estimate
-  for(unsigned int i=0; i < dimension_; i++)
+  for(unsigned int i=0; i < dimension_; ++i)
   {
     solution[i] = jnt_pos_out(i);
   }
@@ -335,7 +337,7 @@ bool ReemKinematicsPlugin::getPositionIK(const geometry_msgs::Pose &ik_pose,
 {
   return getPositionIK(ik_pose,
                        ik_seed_state,
-                       ik_seed_state,
+                       default_posture_,
                        solution,
                        error_code);
 }
@@ -369,22 +371,24 @@ bool ReemKinematicsPlugin::searchPositionIK(const geometry_msgs::Pose &ik_pose,
   KDL::JntArray jnt_pos_in;
   KDL::JntArray jnt_pos_out;
   jnt_pos_in.resize(dimension_);
-  for(unsigned int i=0; i < dimension_; i++)
+  KDL::JntArray posture(dimension_);
+  for(unsigned int i=0; i < dimension_; ++i)
   {
     jnt_pos_in(i) = ik_seed_state[i];
+    posture(i)    = default_posture_[i];
   }
-  for(int i=0; i < max_search_iterations_; i++)
+  for(int i=0; i < max_search_iterations_; ++i)
   {
-    for(unsigned int j=0; j < dimension_; j++)
+    for(unsigned int j=0; j < dimension_; ++j)
     { 
       ROS_DEBUG_STREAM("seed state " << j << " " << jnt_pos_in(j));
     }
-    ik_solver_->setPosture(jnt_pos_in);
+    ik_solver_->setPosture(posture);
     bool ik_valid = ik_solver_->solve(jnt_pos_in, pose_desired, jnt_pos_out);
     ROS_DEBUG_STREAM("IK success " << ik_valid << " time " << (ros::WallTime::now()-n1).toSec());
     if(ik_valid) {
       solution.resize(dimension_);
-      for(unsigned int j=0; j < dimension_; j++) {
+      for(unsigned int j=0; j < dimension_; ++j) {
         solution[j] = jnt_pos_out(j);
       }
       error_code = kinematics::SUCCESS;
@@ -428,9 +432,11 @@ bool ReemKinematicsPlugin::searchPositionIK(const geometry_msgs::Pose &ik_pose,
   KDL::JntArray jnt_pos_in;
   KDL::JntArray jnt_pos_out;
   jnt_pos_in.resize(dimension_);
-  for(unsigned int i=0; i < dimension_; i++)
+  KDL::JntArray posture(dimension_);
+  for(unsigned int i=0; i < dimension_; ++i)
   {
-    jnt_pos_in(i)  = ik_seed_state[i];
+    jnt_pos_in(i) = ik_seed_state[i];
+    posture(i)    = default_posture_[i];
   }
 
   if(!desired_pose_callback.empty())
@@ -441,16 +447,16 @@ bool ReemKinematicsPlugin::searchPositionIK(const geometry_msgs::Pose &ik_pose,
     ROS_DEBUG("Could not find inverse kinematics for desired end-effector pose since the pose may be in collision");
     return false;
   }
-  for(int i=0; i < max_search_iterations_; i++)
+  for(int i=0; i < max_search_iterations_; ++i)
   {
-    ik_solver_->setPosture(jnt_pos_in);
+    ik_solver_->setPosture(posture);
     bool ik_valid = ik_solver_->solve(jnt_pos_in, pose_desired, jnt_pos_out);
     jnt_pos_in = getRandomConfiguration();
     if(!ik_valid)
       continue;
     std::vector<double> solution_local;
     solution_local.resize(dimension_);
-    for(unsigned int j=0; j < dimension_; j++)
+    for(unsigned int j=0; j < dimension_; ++j)
       solution_local[j] = jnt_pos_out(j);
     solution_callback(ik_pose,solution_local,error_code);
     if(error_code == kinematics::SUCCESS)
@@ -481,7 +487,7 @@ bool ReemKinematicsPlugin::getPositionFK(const std::vector<std::string> &link_na
   tf::Stamped<tf::Pose> tf_pose;
   
   jnt_pos_in.resize(dimension_);
-  for(unsigned int i=0; i < dimension_; i++)
+  for(unsigned int i=0; i < dimension_; ++i)
   {
     jnt_pos_in(i) = joint_angles[i];
   }
@@ -489,7 +495,7 @@ bool ReemKinematicsPlugin::getPositionFK(const std::vector<std::string> &link_na
   poses.resize(link_names.size());
   
   bool valid = true;
-  for(unsigned int i=0; i < poses.size(); i++)
+  for(unsigned int i=0; i < poses.size(); ++i)
   {
     ROS_DEBUG("End effector index: %d",getKDLSegmentIndex(link_names[i]));
     if(fk_solver_->JntToCart(jnt_pos_in,p_out,getKDLSegmentIndex(link_names[i])) >=0)
