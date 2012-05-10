@@ -172,6 +172,10 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     updateDeltaTwist(q_next, x_desired);
     if (delta_twist_.norm() < eps_) {break;}
 
+    // Enforce task space maximum velocity through uniform scaling
+    const double delta_twist_scaling = delta_twist_max_ / delta_twist_.cwiseAbs().maxCoeff();
+    if (delta_twist_scaling < 1.0) {delta_twist_ *= delta_twist_scaling;}
+
     // Update Jacobian
     updateJacobian(q_next);
 
@@ -195,12 +199,9 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     delta_q_  = W * inverter_->dlsSolve(delta_twist_) + nullspace_projector_ * (q_posture_.data - q_next.data);
     delta_q_ *= velik_gain_;
 
-    // Saturate incremental joint displacement, if necessary
+    // Enforce joint space maximum velocity through uniform scaling
     const double delta_q_scaling = delta_joint_pos_max_ / delta_q_.cwiseAbs().maxCoeff();
-    if (delta_q_scaling < 1.0)
-    {
-      delta_q_ *= delta_q_scaling;
-    }
+    if (delta_q_scaling < 1.0) {delta_q_ *= delta_q_scaling;}
 
     // Cache value of q_next
     q_tmp_ = q_next.data;
@@ -217,13 +218,14 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     {
       // Keep last configuration that does not exceed position limits
       q_next.data = q_tmp_;
-      ROS_DEBUG_STREAM("Iteration " << i << ", not updating joint position values, weights = " << limits_avoider_->getWeights().transpose());
+//       ROS_DEBUG_STREAM("Iteration " << i << ", not updating joint position values, weights = " << limits_avoider_->getWeights().transpose());
     }
 
-//     ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", delta_q " << delta_q_.transpose()); // TODO: Remove?
+//     ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", q_next " << q_next.data.transpose()); // TODO: Remove?
   }
 
-  ROS_DEBUG_STREAM("Total iterations " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q " << delta_q_.transpose());
+  updateDeltaTwist(q_next, x_desired); // Only needed by below debug message
+  ROS_DEBUG_STREAM("Total iterations " << i << ", delta_twist_norm " << delta_twist_.norm() << " (eps " << eps_ << "), q " << q_next.data.transpose());
 
   return (i < max_iter_);
 }
@@ -250,10 +252,6 @@ void IkSolver::updateDeltaTwist(const KDL::JntArray& q, const std::vector<KDL::F
       ++x_idx;
     }
   }
-
-  // Enforce task space maximum velocity through uniform scaling
-  const double delta_twist_scaling = delta_twist_max_ / delta_twist_.cwiseAbs().maxCoeff();
-  if (delta_twist_scaling < 1.0) {delta_twist_ *= delta_twist_scaling;}
 }
 
 void IkSolver::updateJacobian(const KDL::JntArray& q)
