@@ -147,6 +147,8 @@ void IkSolver::init(const KDL::Tree&                     tree,
   jacobian_     = Eigen::MatrixXd(x_dim, q_dim);
   jacobian_tmp_ = KDL::Jacobian(q_dim);
 
+  Wx_ = VectorXd::Ones(x_dim);
+
   q_posture_           = KDL::JntArray(q_dim);
   nullspace_projector_ = Eigen::MatrixXd(q_dim, q_dim);
   identity_qdim_       = Eigen::MatrixXd::Identity(q_dim, q_dim);
@@ -166,11 +168,13 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
   limits_avoider_->resetJointLimitAvoidance().applyJointLimitAvoidance(q_next.data);
 
   size_t i;
+  double delta_twist_norm;
   for (i = 0; i < max_iter_; ++i)
   {
     // Update current task space velocity error
     updateDeltaTwist(q_next, x_desired);
-    if (delta_twist_.norm() < eps_) {break;}
+    delta_twist_norm = delta_twist_.dot(Wx_.asDiagonal() * delta_twist_); // Weighted norm
+    if (delta_twist_norm < eps_) {break;}
 
     // Enforce task space maximum velocity through uniform scaling
     const double delta_twist_scaling = delta_twist_max_ / delta_twist_.cwiseAbs().maxCoeff();
@@ -186,17 +190,18 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
     using Eigen::VectorXd;
     using Eigen::DiagonalWrapper;
 
-    const MatrixXd& J = jacobian_;                                                        // Convenience alias
-    const DiagonalWrapper<const VectorXd> W = limits_avoider_->getWeights().asDiagonal(); // Convenience alias
+    const MatrixXd& J = jacobian_;                                                         // Convenience alias
+    const DiagonalWrapper<const VectorXd> Wq = limits_avoider_->getWeights().asDiagonal(); // Convenience alias
+    const DiagonalWrapper<const VectorXd> Wx = Wx_.asDiagonal();                           // Convenience alias
 
     // Perform SVD decomposition of J W
-    inverter_->compute(J * W);
+    inverter_->compute(Wx * J * Wq);
 
     // Nullspace projector
-    nullspace_projector_ = identity_qdim_ - W * inverter_->inverse() * J; // NOTE: Not rt-friendly, allocates temporaries
+    nullspace_projector_ = identity_qdim_ - Wq * inverter_->inverse() * Wx * J; // NOTE: Not rt-friendly, allocates temporaries
 
     // Compute incremental joint displacement
-    delta_q_  = W * inverter_->dlsSolve(delta_twist_) + nullspace_projector_ * (q_posture_.data - q_next.data);
+    delta_q_  = Wq * inverter_->dlsSolve(Wx * delta_twist_) + nullspace_projector_ * (q_posture_.data - q_next.data);
     delta_q_ *= velik_gain_;
 
     // Enforce joint space maximum velocity through uniform scaling
@@ -224,8 +229,8 @@ bool IkSolver::solve(const KDL::JntArray&           q_current,
 //     ROS_DEBUG_STREAM("Iteration " << i << ", delta_twist_norm " << delta_twist_.norm() << ", delta_q_scaling " << delta_q_scaling << ", q_next " << q_next.data.transpose()); // TODO: Remove?
   }
 
-  updateDeltaTwist(q_next, x_desired); // Only needed by below debug message
-  ROS_DEBUG_STREAM("Total iterations " << i << ", delta_twist_norm " << delta_twist_.norm() << " (eps " << eps_ << "), q " << q_next.data.transpose());
+  updateDeltaTwist(q_next, x_desired); delta_twist_norm = delta_twist_.transpose().dot(Wx_.asDiagonal() * delta_twist_); // Only needed by below debug message
+  ROS_DEBUG_STREAM("Total iterations " << i << ", delta_twist_norm " << delta_twist_norm << " (eps " << eps_ << "), q " << q_next.data.transpose());
 
   return (i < max_iter_);
 }

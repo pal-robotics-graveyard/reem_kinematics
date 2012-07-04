@@ -122,8 +122,9 @@ bool ReemKinematicsPlugin::initialize(std::string name)
     }
   }
 
-  // Default posture to use in velocity IK
+  // Space diensions
   const int q_dim = kdl_chain_.getNrOfJoints();
+  const int x_dim = 6;
 
   // Get Solver Parameters
   int max_iterations;
@@ -139,7 +140,7 @@ bool ReemKinematicsPlugin::initialize(std::string name)
   private_handle.param("max_delta_q", max_delta_q, 0.03);
   private_handle.param("velik_gain", velik_gain,   1.0);
 
-  // Joint space weights diagonal matrix and default posture
+  // Joint space weights diagonal matrix inverse and default posture
   Eigen::VectorXd Wqinv = Eigen::VectorXd::Ones(q_dim);
   default_posture_.resize(q_dim);
   for (size_t i = 0; i < kdl_chain_.getNrOfSegments(); ++i)
@@ -152,6 +153,15 @@ bool ReemKinematicsPlugin::initialize(std::string name)
     }
   }
 
+  // Task space weights diagonal matrix
+  Eigen::VectorXd Wxinv = Eigen::VectorXd::Ones(x_dim);
+  private_handle.param("task_weights/position/x", Wxinv(0), 1.0);
+  private_handle.param("task_weights/position/y", Wxinv(1), 1.0);
+  private_handle.param("task_weights/position/z", Wxinv(2), 1.0);
+  private_handle.param("task_weights/orientation/x", Wxinv(3), 1.0);
+  private_handle.param("task_weights/orientation/y", Wxinv(4), 1.0);
+  private_handle.param("task_weights/orientation/z", Wxinv(5), 1.0);
+
   // Build Solvers
   fk_solver_.reset(new KDL::ChainFkSolverPos_recursive(kdl_chain_));
   ik_solver_.reset(new IkSolver(kdl_chain_));
@@ -162,6 +172,7 @@ bool ReemKinematicsPlugin::initialize(std::string name)
   ik_solver_->setMaxDeltaPosJoint(max_delta_q);
   ik_solver_->setVelocityIkGain(velik_gain);
   ik_solver_->setJointSpaceWeights(Wqinv);
+  ik_solver_->setTaskSpaceWeights(Wxinv);
   active_ = true;
   return true;
 }
@@ -497,7 +508,6 @@ bool ReemKinematicsPlugin::getPositionFK(const std::vector<std::string> &link_na
   bool valid = true;
   for(unsigned int i=0; i < poses.size(); ++i)
   {
-    ROS_DEBUG("End effector index: %d",getKDLSegmentIndex(link_names[i]));
     if(fk_solver_->JntToCart(jnt_pos_in,p_out,getKDLSegmentIndex(link_names[i])) >=0)
     {
       tf::PoseKDLToMsg(p_out,poses[i]);

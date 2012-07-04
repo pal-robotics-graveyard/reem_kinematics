@@ -174,7 +174,6 @@ public:
 
   virtual ~IkSolver();
 
-  // TODO: What's up with the max iterations?!
   bool solve(const KDL::JntArray&           q_current,
              const std::vector<KDL::Frame>& x_desired,
                    KDL::JntArray&           q_next);
@@ -194,6 +193,7 @@ public:
   void setMaxIterations(std::size_t max_iter) {max_iter_ = max_iter;}
   void setPosture(const KDL::JntArray& q_posture) {q_posture_ = q_posture;} ///< \note Copies values.
   void setJointSpaceWeights(const Eigen::VectorXd& Wq) {assert(limits_avoider_); limits_avoider_->setWeights(Wq);} ///< Contains diagonal elements of matrix (nondiagonal not yet supported)
+  void setTaskSpaceWeights(const Eigen::VectorXd& Wq) {Wx_ = Wq;} ///< Contains diagonal elements of matrix (nondiagonal not yet supported)
 
 private:
   typedef std::vector<std::size_t>             CoupledDirections; /// 0,1,2 -> xyz translation, 3,4,5 -> xyz rotation
@@ -219,6 +219,7 @@ private:
 
   Eigen::MatrixXd jacobian_;
   KDL::Jacobian   jacobian_tmp_;
+  Eigen::VectorXd Wx_; ///< Diagonal of task-space weight matrix.
 
   // Custom velocity-IK members NOTE: Remove this and substitute with generic implementation
   Eigen::MatrixXd nullspace_projector_;
