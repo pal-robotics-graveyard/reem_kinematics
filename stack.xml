@@ -1,7 +1,7 @@
 <stack>
   <description brief="reem_kinematics">reem_kinematics</description>
-  <author>Maintained by Adolfo Rodriguez</author>
-  <license>BSD,Modified BSD</license>  
+  <author>Maintained by Adolfo Rodriguez Tsouroukdissian</author>
+  <license>BSD, Modified BSD</license>
   <review status="unreviewed" notes=""/>
   <url>http://ros.org/wiki/reem_kinematics</url>
   <depend stack="arm_navigation" /> <!-- kinematics_base, kinematics_msgs, arm_navigation_msgs -->
